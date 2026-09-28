@@ -14,6 +14,7 @@
             --accent: #ff4d5e; --down: #3ccf6e; --up: #ff7a45; --chip: #242933; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
@@ -22,6 +23,7 @@
   input, select, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
                           border-radius: 8px; padding: 7px 10px; }
   input[type=search] { flex: 1 1 220px; min-width: 0; }
+  select { max-width: 190px; }
   label.chk { display: flex; gap: 6px; align-items: center; color: var(--muted); white-space: nowrap; }
   #status { max-width: 1400px; margin: 0 auto; padding: 8px 16px; color: var(--muted); font-size: 13px; }
   #status .err { color: var(--up); }
@@ -58,6 +60,26 @@
   svg.big { width: 100%; height: 200px; display: block; margin-top: 8px; }
   .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   a { color: var(--accent); }
+  .views { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-left: auto; }
+  .views a { padding: 7px 12px; color: var(--muted); text-decoration: none; background: var(--bg); }
+  .views a + a { border-left: 1px solid var(--line); }
+  .views a.on { background: var(--text); color: var(--panel); font-weight: 600; }
+  #csv { cursor: pointer; }
+  #tableWrap { max-width: 1400px; margin: 0 auto 40px; padding: 0 16px; }
+  .tscroll { overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+             max-height: calc(100vh - var(--top, 140px) - 24px); }
+  table.inv { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  table.inv th, table.inv td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  table.inv th { position: sticky; top: 0; z-index: 1; background: var(--panel); cursor: pointer; user-select: none;
+                 font-size: 12px; color: var(--muted); box-shadow: inset 0 -1px var(--line); }
+  table.inv th:hover { color: var(--text); }
+  table.inv th .arrow { color: var(--accent); }
+  table.inv .num { text-align: right; }
+  table.inv td.hist { white-space: normal; min-width: 240px; color: var(--muted); }
+  table.inv tbody tr { cursor: pointer; }
+  table.inv tbody tr:hover { background: var(--bg); }
+  table.inv tr.sold td { color: var(--muted); }
+  table.inv td.vin { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
 </style>
 </head>
@@ -85,10 +107,13 @@
     <select id="model"><option value="">All models</option></select>
     <label class="chk"><input type="checkbox" id="changedOnly"> Price changed</label>
     <label class="chk"><input type="checkbox" id="showSold"> Sold only</label>
+    <nav class="views"><a href="#grid" id="viewGrid">Grid</a><a href="#table" id="viewTable">Table</a></nav>
+    <button id="csv" title="Download the cars shown, with full price history">Download CSV</button>
   </div>
 </header>
 <div id="status">Pulling latest inventory…</div>
 <main id="grid"></main>
+<div id="tableWrap" hidden><div class="tscroll" id="tscroll"></div></div>
 
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
 
@@ -98,7 +123,7 @@ const money = n => n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US
 const dateFmt = s => s ? new Date(s.length === 10 ? s + "T12:00:00" : s)
   .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-let cars = [], lastChange = null;
+let cars = [], shown = [], lastChange = null;
 
 // Persist filter choices per browser (convenience only).
 const controls = ["q", "sort", "cond", "make", "model", "changedOnly", "showSold"];
@@ -136,6 +161,7 @@ function fillModels(keep = $("#model").value) {
 function enrich(c) {
   const h = c.history.filter(p => p.price != null);
   c.firstPrice = h.length ? h[0].price : c.price;
+  c.low = h.length ? Math.min(...h.map(p => p.price)) : c.price;
   c.change = c.price != null && c.firstPrice != null ? c.price - c.firstPrice : 0;
   c.lastChange = h.length > 1 ? h[h.length - 1].at : "";
   c.listed = c.inventory_date || c.first_seen.slice(0, 10);
@@ -188,7 +214,25 @@ function render() {
     "changed": (a, b) => b.lastChange.localeCompare(a.lastChange),
   }[$("#sort").value];
   list.sort(by);
+  shown = list;
 
+  const table = location.hash === "#table";
+  $("#viewGrid").classList.toggle("on", !table);
+  $("#viewTable").classList.toggle("on", table);
+  $("#grid").hidden = table;
+  $("#tableWrap").hidden = !table;
+  if (table) renderTable(list); else renderGrid(list);
+
+  const active = cars.filter(c => !c.removed_at).length;
+  $("#count") && ($("#count").textContent = `${list.length} shown · ${active} in stock`);
+}
+
+function emptyMessage() {
+  return !cars.length ? "Loading inventory…" : $("#showSold").checked
+    ? "No sold cars yet. Cars appear here once they drop off the dealer's inventory." : "No cars match these filters.";
+}
+
+function renderGrid(list) {
   $("#grid").innerHTML = list.length ? list.map(c => {
     const deltaCls = c.change < 0 ? "down" : "up";
     return `<article class="card ${c.removed_at ? "sold" : ""}" data-vin="${esc(c.vin)}">
@@ -212,10 +256,81 @@ function render() {
         ${spark(c.history, "spark")}
       </div>
     </article>`;
-  }).join("") : `<div class="empty">${!cars.length ? "Loading inventory…" : $("#showSold").checked ? "No sold cars yet. Cars appear here once they drop off the dealer's inventory." : "No cars match these filters."}</div>`;
+  }).join("") : `<div class="empty">${emptyMessage()}</div>`;
+}
 
-  const active = cars.filter(c => !c.removed_at).length;
-  $("#count") && ($("#count").textContent = `${list.length} shown · ${active} in stock`);
+// ---- Table view: one row per car. Clicking a header sorts by that column
+// (overriding the sort dropdown until the dropdown is changed again).
+const statusText = c => c.removed_at ? `Sold ${dateFmt(c.removed_at)}` : c.in_transit ? "In transit" : "In stock";
+const histText = c => c.history.map(p => money(p.price)).join(" → ");
+const signed = n => n ? (n < 0 ? "−" : "+") + money(Math.abs(n)) : "";
+const COLUMNS = [
+  { key: "year", label: "Year", num: true, val: c => c.year },
+  { key: "make", label: "Make", val: c => c.make },
+  { key: "model", label: "Model", val: c => c.model },
+  { key: "trim", label: "Trim", val: c => c.trim },
+  { key: "condition", label: "Type", val: c => c.condition },
+  { key: "mileage", label: "Miles", num: true, val: c => c.mileage, fmt: c => c.mileage ? c.mileage.toLocaleString("en-US") : "" },
+  { key: "ext_color", label: "Color", val: c => c.ext_color },
+  { key: "price", label: "Price", num: true, val: c => c.price, fmt: c => money(c.price) },
+  { key: "msrp", label: "MSRP", num: true, val: c => c.msrp, fmt: c => money(c.msrp) },
+  { key: "change", label: "Change", num: true, val: c => c.change,
+    fmt: c => c.change ? `<span class="delta ${c.change < 0 ? "down" : "up"}">${signed(c.change)}</span>` : "" },
+  { key: "changes", label: "# Changes", num: true, val: c => c.history.length - 1, fmt: c => c.history.length - 1 || "" },
+  { key: "low", label: "Lowest seen", num: true, val: c => c.low, fmt: c => money(c.low) },
+  { key: "lastChange", label: "Last change", val: c => c.lastChange, fmt: c => c.lastChange ? dateFmt(c.lastChange) : "" },
+  { key: "listed", label: "Listed", val: c => c.listed, fmt: c => dateFmt(c.listed) },
+  { key: "first_seen", label: "First tracked", val: c => c.first_seen, fmt: c => dateFmt(c.first_seen) },
+  { key: "status", label: "Status", val: c => (c.removed_at ? "2" : c.in_transit ? "1" : "0") + (c.removed_at || ""), fmt: statusText },
+  { key: "stock", label: "Stock #", val: c => c.stock },
+  { key: "vin", label: "VIN", val: c => c.vin, cls: "vin" },
+  { key: "history", label: "Price history", val: c => c.history.length, fmt: c => esc(histText(c)), cls: "hist" },
+];
+let tableSort = null; // { key, dir: 1 | -1 }
+
+function renderTable(list) {
+  if (tableSort) {
+    const col = COLUMNS.find(c => c.key === tableSort.key);
+    list = [...list].sort((a, b) => {
+      const x = col.val(a), y = col.val(b);
+      if (x == null || x === "") return 1; // blanks last either way
+      if (y == null || y === "") return -1;
+      return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * tableSort.dir;
+    });
+  }
+  const head = COLUMNS.map(col => `<th class="${col.num ? "num" : ""}" data-key="${col.key}">${col.label}${
+    tableSort?.key === col.key ? ` <span class="arrow">${tableSort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("");
+  const body = list.map(c => `<tr class="${c.removed_at ? "sold" : ""}" data-vin="${esc(c.vin)}">${COLUMNS.map(col =>
+    `<td class="${col.num ? "num" : ""} ${col.cls || ""}">${col.fmt ? col.fmt(c) : esc(col.val(c))}</td>`).join("")}</tr>`).join("");
+  $("#tscroll").innerHTML = list.length
+    ? `<table class="inv"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+    : `<div class="empty">${emptyMessage()}</div>`;
+  // Keep the table (and its sticky header row) inside the window below the page header.
+  document.documentElement.style.setProperty("--top", $("#tableWrap").getBoundingClientRect().top + "px");
+}
+
+// ---- CSV of the cars currently shown, including every recorded price.
+function downloadCSV() {
+  const cols = [
+    ["VIN", c => c.vin], ["Stock", c => c.stock], ["Year", c => c.year], ["Make", c => c.make],
+    ["Model", c => c.model], ["Trim", c => c.trim], ["Type", c => c.condition], ["Miles", c => c.mileage],
+    ["Exterior", c => c.ext_color], ["Interior", c => c.int_color], ["Body", c => c.body],
+    ["Engine", c => c.engine], ["Fuel", c => c.fuel], ["Transmission", c => c.transmission],
+    ["Price", c => c.price], ["MSRP", c => c.msrp], ["First price", c => c.firstPrice],
+    ["Change", c => c.change], ["Lowest seen", c => c.low], ["Price changes", c => c.history.length - 1],
+    ["Listed", c => c.listed], ["First tracked", c => c.first_seen.slice(0, 10)],
+    ["Removed", c => c.removed_at ? c.removed_at.slice(0, 10) : ""], ["Status", statusText],
+    ["Price history", c => c.history.map(p => `${p.at.slice(0, 10)} ${p.price ?? ""}`).join("; ")],
+    ["URL", c => c.url],
+  ];
+  const cell = v => { v = String(v ?? ""); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+  const csv = [cols.map(c => c[0]), ...shown.map(car => cols.map(([, f]) => f(car)))]
+    .map(r => r.map(cell).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `car-inventory-${new Date().toLocaleDateString("en-CA")}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function openCar(vin) {
@@ -297,6 +412,20 @@ function apply(data, mode) {
 }
 
 controls.forEach(id => $("#" + id).addEventListener("input", render));
+$("#sort").addEventListener("input", () => { tableSort = null; render(); });
+window.addEventListener("hashchange", render);
+window.addEventListener("resize", () => location.hash === "#table" && render());
+$("#csv").addEventListener("click", downloadCSV);
+$("#tscroll").addEventListener("click", e => {
+  const th = e.target.closest("th");
+  if (th) {
+    const key = th.dataset.key;
+    tableSort = { key, dir: tableSort?.key === key ? -tableSort.dir : 1 };
+    return render();
+  }
+  const tr = e.target.closest("tr[data-vin]");
+  if (tr) openCar(tr.dataset.vin);
+});
 $("#grid").addEventListener("click", e => { const card = e.target.closest(".card"); if (card) openCar(card.dataset.vin); });
 const dlg = $("#dlg");
 dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });

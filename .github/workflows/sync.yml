@@ -4,7 +4,7 @@ on:
   schedule:
     # GitHub cron is UTC with no DST, so cover every UTC hour that can fall in
     # 8 a.m.–10 p.m. Eastern; the first step skips runs outside that window.
-    - cron: "7 0-3,12-23 * * *"
+    - cron: "17 0-3,12-23 * * *"
   workflow_dispatch: # "Run workflow" button for a manual sync
 
 permissions:
