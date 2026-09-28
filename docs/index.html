@@ -82,6 +82,7 @@
       <option value="used">Used</option>
     </select>
     <select id="make"><option value="">All makes</option></select>
+    <select id="model"><option value="">All models</option></select>
     <label class="chk"><input type="checkbox" id="changedOnly"> Price changed</label>
     <label class="chk"><input type="checkbox" id="showSold"> Sold only</label>
   </div>
@@ -100,7 +101,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 let cars = [], lastChange = null;
 
 // Persist filter choices per browser (convenience only).
-const controls = ["q", "sort", "cond", "make", "changedOnly", "showSold"];
+const controls = ["q", "sort", "cond", "make", "model", "changedOnly", "showSold"];
 function saveUI() {
   try {
     localStorage.setItem("carTrackerUI", JSON.stringify(Object.fromEntries(controls.map(id => {
@@ -108,14 +109,28 @@ function saveUI() {
     }))));
   } catch {}
 }
+function savedUI() {
+  try { return JSON.parse(localStorage.getItem("carTrackerUI") || "{}"); } catch { return {}; }
+}
 function restoreUI() {
   try {
-    const s = JSON.parse(localStorage.getItem("carTrackerUI") || "{}");
+    const s = savedUI();
     for (const [id, v] of Object.entries(s)) {
       const el = $("#" + id); if (!el) continue;
       if (el.type === "checkbox") el.checked = v; else el.value = v;
     }
   } catch {}
+}
+
+function fillModels(keep = $("#model").value) {
+  const make = $("#make").value, sold = $("#showSold").checked;
+  const counts = {};
+  for (const c of cars)
+    if (c.model && (!make || c.make === make) && !!c.removed_at === sold) counts[c.model] = (counts[c.model] || 0) + 1;
+  const models = Object.keys(counts).sort();
+  $("#model").innerHTML = `<option value="">All models</option>` +
+    models.map(m => `<option value="${esc(m)}">${esc(m)} (${counts[m]})</option>`).join("");
+  $("#model").value = models.includes(keep) ? keep : "";
 }
 
 function enrich(c) {
@@ -153,11 +168,13 @@ function spark(history, cls, w = 260, h = 34, labels = false) {
 }
 
 function render() {
+  fillModels(); // model list follows the selected make
   saveUI();
-  const q = $("#q").value.trim().toLowerCase(), cond = $("#cond").value, make = $("#make").value;
+  const q = $("#q").value.trim().toLowerCase(), cond = $("#cond").value, make = $("#make").value,
+        model = $("#model").value;
   const changedOnly = $("#changedOnly").checked, showSold = $("#showSold").checked;
   let list = cars.filter(c =>
-    (showSold ? !!c.removed_at : !c.removed_at) && (!cond || c.condition === cond) && (!make || c.make === make) &&
+    (showSold ? !!c.removed_at : !c.removed_at) && (!cond || c.condition === cond) && (!make || c.make === make) && (!model || c.model === model) &&
     (!changedOnly || c.history.length > 1) && (!q || q.split(/\s+/).every(w => c.search.includes(w))));
 
   const by = {
@@ -257,6 +274,7 @@ function apply(data, mode) {
     $("#make").innerHTML = `<option value="">All makes</option>` + makes.map(m => `<option>${esc(m)}</option>`).join("");
     $("#make").value = makes.includes(cur) ? cur : "";
     restoreUI();
+    fillModels(savedUI().model);
   }
   const changed = lastChange ? `Last change recorded ${new Date(lastChange).toLocaleString("en-US",
     { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : "";
