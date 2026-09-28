@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Car Tracker</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #16181d; --muted: #667085; --line: #e4e7ec;
+    --accent: #c8102e; --down: #12813a; --up: #c4320a; --chip: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --panel: #181b21; --text: #e9ecf1; --muted: #98a2b3; --line: #2a2f38;
+            --accent: #ff4d5e; --down: #3ccf6e; --up: #ff7a45; --chip: #242933; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1400px; margin: 0 auto; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  h1 { font-size: 18px; margin: 0 12px 0 0; white-space: nowrap; }
+  input, select, button { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+                          border-radius: 8px; padding: 7px 10px; }
+  input[type=search] { flex: 1 1 220px; min-width: 0; }
+  label.chk { display: flex; gap: 6px; align-items: center; color: var(--muted); white-space: nowrap; }
+  #status { max-width: 1400px; margin: 0 auto; padding: 8px 16px; color: var(--muted); font-size: 13px; }
+  #status .err { color: var(--up); }
+  main { max-width: 1400px; margin: 0 auto; padding: 0 16px 40px;
+         display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          display: flex; flex-direction: column; cursor: pointer; transition: transform .1s; }
+  .card:hover { transform: translateY(-2px); }
+  .card.sold { opacity: .55; }
+  .photo { aspect-ratio: 4/3; background: var(--chip) center/cover no-repeat; position: relative; }
+  .badges { position: absolute; top: 8px; left: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 99px; background: rgba(0,0,0,.7); color: #fff; }
+  .badge.new { background: var(--accent); }
+  .badge.drop { background: var(--down); }
+  .badge.rise { background: var(--up); }
+  .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .name { font-weight: 600; }
+  .meta { color: var(--muted); font-size: 12.5px; }
+  .prices { display: flex; align-items: baseline; gap: 8px; margin-top: auto; padding-top: 6px; }
+  .price { font-size: 18px; font-weight: 700; }
+  .msrp { color: var(--muted); text-decoration: line-through; font-size: 12.5px; }
+  .delta { font-size: 12.5px; font-weight: 600; }
+  .delta.down { color: var(--down); } .delta.up { color: var(--up); }
+  svg.spark { width: 100%; height: 34px; display: block; }
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text);
+           width: min(760px, calc(100vw - 32px)); padding: 0; }
+  dialog::backdrop { background: rgba(0,0,0,.5); }
+  .dlg { padding: 18px; }
+  .dlg h2 { margin: 0 0 4px; font-size: 18px; }
+  .dlg table { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
+  .dlg td, .dlg th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .dlg .specs { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 16px; margin: 10px 0; font-size: 13px; }
+  .dlg .specs span { color: var(--muted); }
+  svg.big { width: 100%; height: 200px; display: block; margin-top: 8px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  a { color: var(--accent); }
+  .empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Moses Toyota Inventory</h1>
+    <input type="search" id="q" placeholder="Search make, model, trim, VIN, stock #">
+    <select id="sort">
+      <option value="newest">Newest listed</option>
+      <option value="oldest">Oldest listed</option>
+      <option value="price-asc">Price: low to high</option>
+      <option value="price-desc">Price: high to low</option>
+      <option value="year-desc">Year: newest</option>
+      <option value="miles-asc">Mileage: lowest</option>
+      <option value="drop">Biggest price drop</option>
+      <option value="changed">Most recent price change</option>
+    </select>
+    <select id="cond">
+      <option value="">New &amp; used</option>
+      <option value="new">New</option>
+      <option value="used">Used</option>
+    </select>
+    <select id="make"><option value="">All makes</option></select>
+    <label class="chk"><input type="checkbox" id="changedOnly"> Price changed</label>
+    <label class="chk"><input type="checkbox" id="showSold"> Sold only</label>
+  </div>
+</header>
+<div id="status">Pulling latest inventory…</div>
+<main id="grid"></main>
+
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const money = n => n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US");
+const dateFmt = s => s ? new Date(s.length === 10 ? s + "T12:00:00" : s)
+  .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let cars = [], lastChange = null;
+
+// Persist filter choices per browser (convenience only).
+const controls = ["q", "sort", "cond", "make", "changedOnly", "showSold"];
+function saveUI() {
+  try {
+    localStorage.setItem("carTrackerUI", JSON.stringify(Object.fromEntries(controls.map(id => {
+      const el = $("#" + id); return [id, el.type === "checkbox" ? el.checked : el.value];
+    }))));
+  } catch {}
+}
+function restoreUI() {
+  try {
+    const s = JSON.parse(localStorage.getItem("carTrackerUI") || "{}");
+    for (const [id, v] of Object.entries(s)) {
+      const el = $("#" + id); if (!el) continue;
+      if (el.type === "checkbox") el.checked = v; else el.value = v;
+    }
+  } catch {}
+}
+
+function enrich(c) {
+  const h = c.history.filter(p => p.price != null);
+  c.firstPrice = h.length ? h[0].price : c.price;
+  c.change = c.price != null && c.firstPrice != null ? c.price - c.firstPrice : 0;
+  c.lastChange = h.length > 1 ? h[h.length - 1].at : "";
+  c.listed = c.inventory_date || c.first_seen.slice(0, 10);
+  c.search = [c.name, c.make, c.model, c.trim, c.vin, c.stock, c.ext_color, c.body].join(" ").toLowerCase();
+  return c;
+}
+
+function spark(history, cls, w = 260, h = 34, labels = false) {
+  const pts = history.filter(p => p.price != null);
+  if (pts.length < 2) return "";
+  // Each recorded price gets an equal-width step. Spacing by time squeezed a
+  // recent change against the right edge, so it looked like a bracket.
+  const v = pts.map(p => p.price), n = v.length;
+  const [v0, v1] = [Math.min(...v), Math.max(...v)];
+  const padX = labels ? 12 : 2, padTop = labels ? 24 : 4, padBot = labels ? 26 : 4;
+  const seg = (w - 2 * padX) / n, x = i => padX + i * seg,
+        y = val => padTop + (v1 - val) / (v1 - v0 || 1) * (h - padTop - padBot);
+  let d = `M${x(0)},${y(v[0])}`;
+  for (let i = 0; i < n; i++) d += `V${y(v[i])}H${x(i + 1)}`; // step line: price holds until it changes
+  const color = v[n - 1] < v[0] ? "var(--down)" : v[n - 1] > v[0] ? "var(--up)" : "var(--muted)";
+  const text = (tx, ty, s, weight = 400) =>
+    `<text x="${tx}" y="${ty}" font-size="12" font-weight="${weight}" fill="${weight > 400 ? "var(--text)" : "var(--muted)"}" text-anchor="middle">${s}</text>`;
+  const marks = !labels ? "" : pts.map((p, i) => {
+    const cx = x(i) + seg / 2;
+    return text(cx, y(v[i]) - 8, money(v[i]), 600) +
+      text(cx, h - 8, new Date(p.at).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+  }).join("");
+  return `<svg class="${cls}" viewBox="0 0 ${w} ${h}" ${labels ? "" : 'preserveAspectRatio="none"'}>
+    <path d="${d}" fill="none" stroke="${color}" stroke-width="${labels ? 2.5 : 2}" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>${marks}</svg>`;
+}
+
+function render() {
+  saveUI();
+  const q = $("#q").value.trim().toLowerCase(), cond = $("#cond").value, make = $("#make").value;
+  const changedOnly = $("#changedOnly").checked, showSold = $("#showSold").checked;
+  let list = cars.filter(c =>
+    (showSold ? !!c.removed_at : !c.removed_at) && (!cond || c.condition === cond) && (!make || c.make === make) &&
+    (!changedOnly || c.history.length > 1) && (!q || q.split(/\s+/).every(w => c.search.includes(w))));
+
+  const by = {
+    "newest": (a, b) => b.listed.localeCompare(a.listed) || b.first_seen.localeCompare(a.first_seen),
+    "oldest": (a, b) => a.listed.localeCompare(b.listed),
+    "price-asc": (a, b) => (a.price ?? 1e12) - (b.price ?? 1e12),
+    "price-desc": (a, b) => (b.price ?? -1) - (a.price ?? -1),
+    "year-desc": (a, b) => b.year - a.year || b.listed.localeCompare(a.listed),
+    "miles-asc": (a, b) => (a.mileage ?? 0) - (b.mileage ?? 0),
+    "drop": (a, b) => a.change - b.change,
+    "changed": (a, b) => b.lastChange.localeCompare(a.lastChange),
+  }[$("#sort").value];
+  list.sort(by);
+
+  $("#grid").innerHTML = list.length ? list.map(c => {
+    const deltaCls = c.change < 0 ? "down" : "up";
+    return `<article class="card ${c.removed_at ? "sold" : ""}" data-vin="${esc(c.vin)}">
+      <div class="photo" style="background-image:url('${esc(c.photo)}')">
+        <div class="badges">
+          <span class="badge ${c.condition === "new" ? "new" : ""}">${esc(c.condition?.toUpperCase())}</span>
+          ${c.in_transit ? `<span class="badge">IN TRANSIT</span>` : ""}
+          ${c.removed_at ? `<span class="badge">SOLD / REMOVED</span>` : ""}
+          ${c.change ? `<span class="badge ${c.change < 0 ? "drop" : "rise"}">${c.change < 0 ? "▼" : "▲"} ${money(Math.abs(c.change))}</span>` : ""}
+        </div>
+      </div>
+      <div class="body">
+        <div class="name">${esc(c.name)}</div>
+        <div class="meta">${c.mileage ? c.mileage.toLocaleString("en-US") + " mi · " : ""}${esc(c.ext_color || "")} · Stock ${esc(c.stock)}</div>
+        <div class="meta">Listed ${dateFmt(c.listed)}</div>
+        <div class="prices">
+          <span class="price">${money(c.price)}</span>
+          ${c.msrp && c.price && c.msrp > c.price ? `<span class="msrp">${money(c.msrp)}</span>` : ""}
+          ${c.change ? `<span class="delta ${deltaCls}">${c.change < 0 ? "−" : "+"}${money(Math.abs(c.change))}</span>` : ""}
+        </div>
+        ${spark(c.history, "spark")}
+      </div>
+    </article>`;
+  }).join("") : `<div class="empty">${!cars.length ? "Loading inventory…" : $("#showSold").checked ? "No sold cars yet. Cars appear here once they drop off the dealer's inventory." : "No cars match these filters."}</div>`;
+
+  const active = cars.filter(c => !c.removed_at).length;
+  $("#count") && ($("#count").textContent = `${list.length} shown · ${active} in stock`);
+}
+
+function openCar(vin) {
+  const c = cars.find(c => c.vin === vin); if (!c) return;
+  const rows = c.history.map((p, i) => {
+    const prev = c.history[i - 1], d = prev && p.price != null && prev.price != null ? p.price - prev.price : null;
+    return `<tr><td>${new Date(p.at).toLocaleString("en-US")}</td><td>${money(p.price)}</td><td>${money(p.msrp)}</td>
+      <td class="delta ${d < 0 ? "down" : d > 0 ? "up" : ""}">${d ? (d < 0 ? "−" : "+") + money(Math.abs(d)) : i ? "—" : "first seen"}</td></tr>`;
+  }).reverse().join("");
+  const spec = (k, v) => v ? `<div><span>${k}:</span> ${esc(v)}</div>` : "";
+  $("#dlgBody").innerHTML = `
+    <div class="row"><h2>${esc(c.name)}</h2><button onclick="dlg.close()">Close</button></div>
+    <div class="meta">VIN ${esc(c.vin)} · Stock ${esc(c.stock)} · <a href="${esc(c.url)}" target="_blank" rel="noopener">View on dealer site ↗</a></div>
+    <div class="prices"><span class="price">${money(c.price)}</span>
+      ${c.msrp ? `<span class="meta">MSRP ${money(c.msrp)}</span>` : ""}</div>
+    <div class="specs">
+      ${spec("Condition", c.condition)}${spec("Listed", dateFmt(c.listed))}${spec("First tracked", dateFmt(c.first_seen))}
+      ${spec("Mileage", c.mileage ? c.mileage.toLocaleString("en-US") + " mi" : "")}${spec("Exterior", c.ext_color)}
+      ${spec("Interior", c.int_color)}${spec("Body", c.body)}${spec("Engine", c.engine)}${spec("Fuel", c.fuel)}
+      ${spec("Transmission", c.transmission)}${spec("MPG", c.mpg_city ? `${c.mpg_city} city / ${c.mpg_hwy} hwy` : "")}
+      ${spec("Removed", c.removed_at ? dateFmt(c.removed_at) : "")}
+    </div>
+    ${spark(c.history, "big", 700, 200, true) || `<p class="meta">No price changes recorded yet. A chart will appear once the price moves.</p>`}
+    <table><thead><tr><th>Recorded</th><th>Price</th><th>MSRP</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table>`;
+  dlg.showModal();
+}
+
+async function load() {
+  restoreUI();
+  // Show the saved data right away (this is all GitHub Pages has).
+  let hosted = false;
+  try {
+    const saved = await (await fetch("data/inventory.json", { cache: "no-store" })).json();
+    apply(saved, "saved");
+  } catch (e) {
+    $("#status").innerHTML = `<span class="err">Couldn't load inventory data: ${esc(e.message)}</span>`;
+    return;
+  }
+  // When running the local server, also pull the live feed now.
+  try {
+    const r = await fetch("api/refresh");
+    if (!r.ok) throw new Error("no local server");
+    apply(await r.json(), "live");
+  } catch {
+    hosted = true;
+  }
+  if (hosted) apply(null, "hosted");
+}
+
+function apply(data, mode) {
+  if (data) {
+    cars = data.cars.map(enrich);
+    lastChange = data.last_change;
+    const makes = [...new Set(cars.map(c => c.make).filter(Boolean))].sort();
+    const cur = $("#make").value;
+    $("#make").innerHTML = `<option value="">All makes</option>` + makes.map(m => `<option>${esc(m)}</option>`).join("");
+    $("#make").value = makes.includes(cur) ? cur : "";
+    restoreUI();
+  }
+  const changed = lastChange ? `Last change recorded ${new Date(lastChange).toLocaleString("en-US",
+    { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : "";
+  const s = data?.sync;
+  let msg = mode === "saved" ? `${changed} · checking live inventory…` : "";
+  if (mode === "hosted") msg = `${changed} · checked hourly, 8 a.m.–10 p.m. Eastern`;
+  else if (mode === "live" && s?.error) msg = `<span class="err">Live update failed (${esc(s.error)}). Showing saved data.</span>`;
+  else if (mode === "live" && s?.summary) {
+    const x = s.summary, parts = [];
+    if (x.added) parts.push(`${x.added} new`);
+    if (x.price_changes) parts.push(`${x.price_changes} price change${x.price_changes > 1 ? "s" : ""}`);
+    if (x.removed) parts.push(`${x.removed} removed`);
+    if (x.returned) parts.push(`${x.returned} returned`);
+    if (x.detail_changes) parts.push(`${x.detail_changes} detail update${x.detail_changes > 1 ? "s" : ""}`);
+    msg = `Checked live feed at ${new Date(s.at).toLocaleTimeString("en-US")} (${x.live} cars, ${x.seconds}s) · ` +
+          (parts.length ? parts.join(", ") : "no changes") + ` · ${changed}`;
+  }
+  $("#status").innerHTML = `<span id="count"></span> · ${msg}`;
+  render();
+}
+
+controls.forEach(id => $("#" + id).addEventListener("input", render));
+$("#grid").addEventListener("click", e => { const card = e.target.closest(".card"); if (card) openCar(card.dataset.vin); });
+const dlg = $("#dlg");
+dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
+load();
+</script>
+</body>
+</html>

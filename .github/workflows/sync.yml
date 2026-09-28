@@ -1,0 +1,55 @@
+name: Sync inventory
+
+on:
+  schedule:
+    # GitHub cron is UTC with no DST, so cover every UTC hour that can fall in
+    # 8 a.m.–10 p.m. Eastern; the first step skips runs outside that window.
+    - cron: "7 0-3,12-23 * * *"
+  workflow_dispatch: # "Run workflow" button for a manual sync
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Eastern time window
+        id: window
+        run: |
+          hour=$(TZ=America/New_York date +%-H)
+          echo "Eastern hour: $hour"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$hour" -ge 8 ] && [ "$hour" -le 22 ]; }; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Outside 8 a.m.–10 p.m. Eastern; skipping."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.window.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.window.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Pull inventory and record changes
+        if: steps.window.outputs.run == 'true'
+        run: python3 tracker.py
+
+      - name: Commit changes (only if something changed)
+        if: steps.window.outputs.run == 'true'
+        run: |
+          if git diff --quiet docs/data; then
+            echo "No inventory changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          git add docs/data
+          git commit -m "Inventory update $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')"
+          git push

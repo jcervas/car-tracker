@@ -1,0 +1,5 @@
+.DS_Store
+cars.db
+*.tmp
+.claude/
+__pycache__/
