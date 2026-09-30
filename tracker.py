@@ -67,14 +67,15 @@ def parse_prices(card):
         pass
     msrp = prices.get("MSRP") or card.get("VehicleMsrp") or None
     price = prices.get("Selling Price") or prices.get("Internet Price") or None
-    return (round(msrp, 2) if msrp else None), (round(price, 2) if price else None)
+    invoice = prices.get("Invoice Price") or None  # new cars only
+    return tuple(round(v, 2) if v else None for v in (msrp, price, invoice))
 
 
 def normalize(card):
     photo = (card.get("VehicleImageModel") or {}).get("VehiclePhotoSrc") or ""
     if photo.startswith("/"):
         photo = f"https://{HOST}{photo}"
-    msrp, price = parse_prices(card)
+    msrp, price, invoice = parse_prices(card)
     status = (card.get("VehicleStatusModel") or {}).get("StatusText")
     if not status:
         status = "In Transit" if card.get("VehicleInTransit") else "In Production" if card.get("VehicleInProduction") else "In Stock"
@@ -103,6 +104,7 @@ def normalize(card):
         "status": status,
         "msrp": msrp,
         "price": price,
+        "invoice": invoice,
     }
     return {k: clean(v) for k, v in car.items()}
 
@@ -160,8 +162,9 @@ def sync():
         old = existing.get(vin)
         if old is None:
             new = {f: car[f] for f in DETAIL_FIELDS}
-            new.update(vin=vin, msrp=car["msrp"], price=car["price"], first_seen=ts, updated_at=ts,
-                       removed_at=None, history=[{"at": ts, "msrp": car["msrp"], "price": car["price"]}],
+            new.update(vin=vin, msrp=car["msrp"], price=car["price"], invoice=car["invoice"],
+                       first_seen=ts, updated_at=ts, removed_at=None,
+                       history=[{"at": ts, "msrp": car["msrp"], "price": car["price"], "invoice": car["invoice"]}],
                        pending_at=ts if "Sale Pending" in (car["status"] or "") else None)
             data["cars"].append(new)
             events.append({"vin": vin, "at": ts, "kind": "added", "price": car["price"]})
@@ -178,6 +181,9 @@ def sync():
             if f not in old:  # field added to the tracker after this car was first seen
                 old[f] = car[f]
                 backfilled = True
+        if "invoice" not in old:  # invoice tracking added later: start from today's value
+            old["invoice"] = car["invoice"]
+            backfilled = True
         if car["status"] and "Sale Pending" in car["status"] and not old.get("pending_at"):
             old["pending_at"] = ts
             events.append({"vin": vin, "at": ts, "kind": "pending"})
@@ -188,10 +194,10 @@ def sync():
             events.append({"vin": vin, "at": ts, "kind": "details", "changes": changed})
             summary["detail_changes"] += 1
 
-        if car["price"] != old["price"] or car["msrp"] != old["msrp"]:
+        if car["price"] != old["price"] or car["msrp"] != old["msrp"] or car["invoice"] != old["invoice"]:
             events.append({"vin": vin, "at": ts, "kind": "price", "from": old["price"], "to": car["price"]})
-            old.update(msrp=car["msrp"], price=car["price"], updated_at=ts)
-            old["history"].append({"at": ts, "msrp": car["msrp"], "price": car["price"]})
+            old.update(msrp=car["msrp"], price=car["price"], invoice=car["invoice"], updated_at=ts)
+            old["history"].append({"at": ts, "msrp": car["msrp"], "price": car["price"], "invoice": car["invoice"]})
             summary["price_changes"] += 1
 
     for vin, old in existing.items():

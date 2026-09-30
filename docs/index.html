@@ -97,6 +97,7 @@
       <option value="year-desc">Year: newest</option>
       <option value="miles-asc">Mileage: lowest</option>
       <option value="drop">Biggest price drop</option>
+      <option value="discount">Biggest dealer discount</option>
       <option value="changed">Most recent price change</option>
     </select>
     <select id="cond">
@@ -182,6 +183,7 @@ function enrich(c) {
   c.low = h.length ? Math.min(...h.map(p => p.price)) : c.price;
   c.change = c.price != null && c.firstPrice != null ? c.price - c.firstPrice : 0;
   c.lastChange = h.length > 1 ? h[h.length - 1].at : "";
+  c.discount = c.condition === "new" && c.msrp && c.price ? Math.round(c.msrp - c.price) : null;
   c.listed = c.inventory_date || c.first_seen.slice(0, 10);
   // Days from the dealer's listing date until it left the inventory (or today).
   const end = c.removed_at ? Date.parse(c.removed_at) : Date.now();
@@ -232,6 +234,7 @@ function render() {
     "year-desc": (a, b) => b.year - a.year || b.listed.localeCompare(a.listed),
     "miles-asc": (a, b) => (a.mileage ?? 0) - (b.mileage ?? 0),
     "drop": (a, b) => a.change - b.change,
+    "discount": (a, b) => (b.discount ?? -1e9) - (a.discount ?? -1e9),
     "changed": (a, b) => b.lastChange.localeCompare(a.lastChange),
   }[$("#sort").value];
   list.sort(by);
@@ -275,6 +278,8 @@ function renderGrid(list) {
           ${c.msrp && c.price && c.msrp > c.price ? `<span class="msrp">${money(c.msrp)}</span>` : ""}
           ${c.change ? `<span class="delta ${deltaCls}">${c.change < 0 ? "−" : "+"}${money(Math.abs(c.change))}</span>` : ""}
         </div>
+        ${c.invoice || c.discount ? `<div class="meta">${c.invoice ? `Invoice ${money(c.invoice)}` : ""}${
+          c.invoice && c.discount ? " · " : ""}${c.discount > 0 ? `${money(c.discount)} off MSRP` : c.discount < 0 ? `${money(-c.discount)} over MSRP` : ""}</div>` : ""}
         ${spark(c.history, "spark")}
       </div>
     </article>`;
@@ -296,6 +301,9 @@ const COLUMNS = [
   { key: "ext_color", label: "Color", val: c => c.ext_color },
   { key: "price", label: "Price", num: true, val: c => c.price, fmt: c => money(c.price) },
   { key: "msrp", label: "MSRP", num: true, val: c => c.msrp, fmt: c => money(c.msrp) },
+  { key: "invoice", label: "Invoice", num: true, val: c => c.invoice, fmt: c => c.invoice ? money(c.invoice) : "" },
+  { key: "discount", label: "Dealer discount", num: true, val: c => c.discount,
+    fmt: c => c.discount == null ? "" : c.discount < 0 ? `<span class="delta up">+${money(-c.discount)}</span>` : money(c.discount) },
   { key: "change", label: "Change", num: true, val: c => c.change,
     fmt: c => c.change ? `<span class="delta ${c.change < 0 ? "down" : "up"}">${signed(c.change)}</span>` : "" },
   { key: "changes", label: "# Changes", num: true, val: c => c.history.length - 1, fmt: c => c.history.length - 1 || "" },
@@ -341,7 +349,7 @@ function downloadCSV() {
     ["Model", c => c.model], ["Trim", c => c.trim], ["Type", c => c.condition], ["Miles", c => c.mileage],
     ["Exterior", c => c.ext_color], ["Interior", c => c.int_color], ["Body", c => c.body],
     ["Engine", c => c.engine], ["Fuel", c => c.fuel], ["Transmission", c => c.transmission],
-    ["Price", c => c.price], ["MSRP", c => c.msrp], ["First price", c => c.firstPrice],
+    ["Price", c => c.price], ["MSRP", c => c.msrp], ["Invoice", c => c.invoice], ["Dealer discount", c => c.discount], ["First price", c => c.firstPrice],
     ["Change", c => c.change], ["Lowest seen", c => c.low], ["Price changes", c => c.history.length - 1],
     ["Listed", c => c.listed], ["First tracked", c => c.first_seen.slice(0, 10)],
     ["Status", statusText], ["Sale pending", c => c.pending_at ? c.pending_at.slice(0, 10) : ""],
@@ -363,7 +371,7 @@ function openCar(vin) {
   const c = cars.find(c => c.vin === vin); if (!c) return;
   const rows = c.history.map((p, i) => {
     const prev = c.history[i - 1], d = prev && p.price != null && prev.price != null ? p.price - prev.price : null;
-    return `<tr><td>${new Date(p.at).toLocaleString("en-US")}</td><td>${money(p.price)}</td><td>${money(p.msrp)}</td>
+    return `<tr><td>${new Date(p.at).toLocaleString("en-US")}</td><td>${money(p.price)}</td><td>${money(p.msrp)}</td><td>${p.invoice ? money(p.invoice) : "—"}</td>
       <td class="delta ${d < 0 ? "down" : d > 0 ? "up" : ""}">${d ? (d < 0 ? "−" : "+") + money(Math.abs(d)) : i ? "—" : "first seen"}</td></tr>`;
   }).reverse().join("");
   const spec = (k, v) => v ? `<div><span>${k}:</span> ${esc(v)}</div>` : "";
@@ -377,11 +385,14 @@ function openCar(vin) {
       ${spec("Mileage", c.mileage ? c.mileage.toLocaleString("en-US") + " mi" : "")}${spec("Exterior", c.ext_color)}
       ${spec("Interior", c.int_color)}${spec("Body", c.body)}${spec("Engine", c.engine)}${spec("Fuel", c.fuel)}
       ${spec("Transmission", c.transmission)}${spec("MPG", c.mpg_city ? `${c.mpg_city} city / ${c.mpg_hwy} hwy` : "")}
+      ${spec("Invoice price", c.invoice ? money(c.invoice) : "")}
+      ${spec(c.discount < 0 ? "Dealer markup" : "Dealer discount", c.discount ? money(Math.abs(c.discount)) : c.discount === 0 ? "None (at MSRP)" : "")}
+      ${spec("Price vs. invoice", c.invoice && c.price ? (c.price >= c.invoice ? "+" : "−") + money(Math.abs(c.price - c.invoice)) : "")}
       ${spec("Status", statusText(c))}${spec("Sale pending since", c.pending_at ? dateFmt(c.pending_at) : "")}
       ${spec("Sold (left inventory)", c.removed_at ? dateFmt(c.removed_at) : "")}${spec(c.removed_at ? "Days on lot" : "Days listed", String(c.daysOnLot))}
     </div>
     ${spark(c.history, "big", 700, 200, true) || `<p class="meta">No price changes recorded yet. A chart will appear once the price moves.</p>`}
-    <table><thead><tr><th>Recorded</th><th>Price</th><th>MSRP</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table><thead><tr><th>Recorded</th><th>Price</th><th>MSRP</th><th>Invoice</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table>`;
   dlg.showModal();
 }
 
