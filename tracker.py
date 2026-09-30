@@ -10,7 +10,9 @@ Uses only the Python standard library.
 """
 
 import base64
+import html
 import json
+import re
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -29,8 +31,17 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML,
 DETAIL_FIELDS = [
     "stock", "name", "year", "make", "model", "trim", "condition", "mileage",
     "ext_color", "int_color", "body", "engine", "fuel", "transmission",
-    "mpg_city", "mpg_hwy", "url", "photo", "inventory_date", "in_transit",
+    "mpg_city", "mpg_hwy", "url", "photo", "inventory_date", "in_transit", "status",
 ]
+
+
+def clean(v):
+    """Strip HTML the dealer embeds in text (e.g. disclaimer footnote links) and tidy spacing."""
+    if not isinstance(v, str):
+        return v
+    v = re.sub(r"<a\b[^>]*>.*?</a>", " ", v, flags=re.S)  # footnote links: drop their text too
+    v = html.unescape(re.sub(r"<[^>]+>", " ", v))
+    return re.sub(r"\s+", " ", v).strip() or None
 
 
 def now():
@@ -64,7 +75,10 @@ def normalize(card):
     if photo.startswith("/"):
         photo = f"https://{HOST}{photo}"
     msrp, price = parse_prices(card)
-    return {
+    status = (card.get("VehicleStatusModel") or {}).get("StatusText")
+    if not status:
+        status = "In Transit" if card.get("VehicleInTransit") else "In Production" if card.get("VehicleInProduction") else "In Stock"
+    car = {
         "vin": card["VehicleVin"],
         "stock": card.get("VehicleStockNumber"),
         "name": card.get("VehicleName"),
@@ -86,9 +100,11 @@ def normalize(card):
         "photo": photo,
         "inventory_date": (card.get("VehicleTaggingInventoryDate") or "").replace("/", "-") or None,
         "in_transit": int(bool(card.get("VehicleInTransit"))),
+        "status": status,
         "msrp": msrp,
         "price": price,
     }
+    return {k: clean(v) for k, v in car.items()}
 
 
 def fetch_inventory():
@@ -138,13 +154,15 @@ def sync():
     data = load_data()
     existing = {c["vin"]: c for c in data["cars"]}
     events = data["events"]
+    backfilled = False
 
     for vin, car in live.items():
         old = existing.get(vin)
         if old is None:
             new = {f: car[f] for f in DETAIL_FIELDS}
             new.update(vin=vin, msrp=car["msrp"], price=car["price"], first_seen=ts, updated_at=ts,
-                       removed_at=None, history=[{"at": ts, "msrp": car["msrp"], "price": car["price"]}])
+                       removed_at=None, history=[{"at": ts, "msrp": car["msrp"], "price": car["price"]}],
+                       pending_at=ts if "Sale Pending" in (car["status"] or "") else None)
             data["cars"].append(new)
             events.append({"vin": vin, "at": ts, "kind": "added", "price": car["price"]})
             summary["added"] += 1
@@ -156,6 +174,14 @@ def sync():
             events.append({"vin": vin, "at": ts, "kind": "returned"})
             summary["returned"] += 1
 
+        for f in DETAIL_FIELDS:
+            if f not in old:  # field added to the tracker after this car was first seen
+                old[f] = car[f]
+                backfilled = True
+        if car["status"] and "Sale Pending" in car["status"] and not old.get("pending_at"):
+            old["pending_at"] = ts
+            events.append({"vin": vin, "at": ts, "kind": "pending"})
+            summary["pending"] = summary.get("pending", 0) + 1
         changed = {f: [old.get(f), car[f]] for f in DETAIL_FIELDS if car[f] != old.get(f)}
         if changed:
             old.update({f: v[1] for f, v in changed.items()}, updated_at=ts)
@@ -176,6 +202,8 @@ def sync():
 
     if any(summary[k] for k in summary if k != "live"):
         data["last_change"] = ts
+        save_data(data)
+    elif backfilled:
         save_data(data)
     return summary
 

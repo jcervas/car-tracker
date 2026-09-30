@@ -39,6 +39,7 @@
   .badge.new { background: var(--accent); }
   .badge.drop { background: var(--down); }
   .badge.rise { background: var(--up); }
+  .badge.pending { background: #b54708; }
   .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
   .name { font-weight: 600; }
   .meta { color: var(--muted); font-size: 12.5px; }
@@ -106,7 +107,15 @@
     <select id="make"><option value="">All makes</option></select>
     <select id="model"><option value="">All models</option></select>
     <label class="chk"><input type="checkbox" id="changedOnly"> Price changed</label>
-    <label class="chk"><input type="checkbox" id="showSold"> Sold only</label>
+    <select id="stat" title="Status">
+      <option value="">Available (not sold)</option>
+      <option value="In Stock">In stock</option>
+      <option value="In Transit">In transit</option>
+      <option value="In Production">In production</option>
+      <option value="pending">Sale pending</option>
+      <option value="sold">Sold</option>
+      <option value="all">All, including sold</option>
+    </select>
     <nav class="views"><a href="#grid" id="viewGrid">Grid</a><a href="#table" id="viewTable">Table</a></nav>
     <button id="csv" title="Download the cars shown, with full price history">Download CSV</button>
   </div>
@@ -126,7 +135,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 let cars = [], shown = [], lastChange = null;
 
 // Persist filter choices per browser (convenience only).
-const controls = ["q", "sort", "cond", "make", "model", "changedOnly", "showSold"];
+const controls = ["q", "sort", "cond", "make", "model", "stat", "changedOnly"];
 function saveUI() {
   try {
     localStorage.setItem("carTrackerUI", JSON.stringify(Object.fromEntries(controls.map(id => {
@@ -147,11 +156,20 @@ function restoreUI() {
   } catch {}
 }
 
+const isPending = c => !c.removed_at && /sale pending/i.test(c.status || "");
+function statusMatch(c, v = $("#stat").value) {
+  if (v === "all") return true;
+  if (v === "sold") return !!c.removed_at;
+  if (c.removed_at) return false;
+  if (v === "pending") return isPending(c);
+  return !v || (c.status || "In Stock").startsWith(v);
+}
+
 function fillModels(keep = $("#model").value) {
-  const make = $("#make").value, sold = $("#showSold").checked;
+  const make = $("#make").value;
   const counts = {};
   for (const c of cars)
-    if (c.model && (!make || c.make === make) && !!c.removed_at === sold) counts[c.model] = (counts[c.model] || 0) + 1;
+    if (c.model && (!make || c.make === make) && statusMatch(c)) counts[c.model] = (counts[c.model] || 0) + 1;
   const models = Object.keys(counts).sort();
   $("#model").innerHTML = `<option value="">All models</option>` +
     models.map(m => `<option value="${esc(m)}">${esc(m)} (${counts[m]})</option>`).join("");
@@ -165,6 +183,9 @@ function enrich(c) {
   c.change = c.price != null && c.firstPrice != null ? c.price - c.firstPrice : 0;
   c.lastChange = h.length > 1 ? h[h.length - 1].at : "";
   c.listed = c.inventory_date || c.first_seen.slice(0, 10);
+  // Days from the dealer's listing date until it left the inventory (or today).
+  const end = c.removed_at ? Date.parse(c.removed_at) : Date.now();
+  c.daysOnLot = Math.max(0, Math.round((end - Date.parse(c.listed + "T12:00:00")) / 864e5));
   c.search = [c.name, c.make, c.model, c.trim, c.vin, c.stock, c.ext_color, c.body].join(" ").toLowerCase();
   return c;
 }
@@ -198,9 +219,9 @@ function render() {
   saveUI();
   const q = $("#q").value.trim().toLowerCase(), cond = $("#cond").value, make = $("#make").value,
         model = $("#model").value;
-  const changedOnly = $("#changedOnly").checked, showSold = $("#showSold").checked;
+  const changedOnly = $("#changedOnly").checked;
   let list = cars.filter(c =>
-    (showSold ? !!c.removed_at : !c.removed_at) && (!cond || c.condition === cond) && (!make || c.make === make) && (!model || c.model === model) &&
+    statusMatch(c) && (!cond || c.condition === cond) && (!make || c.make === make) && (!model || c.model === model) &&
     (!changedOnly || c.history.length > 1) && (!q || q.split(/\s+/).every(w => c.search.includes(w))));
 
   const by = {
@@ -224,11 +245,11 @@ function render() {
   if (table) renderTable(list); else renderGrid(list);
 
   const active = cars.filter(c => !c.removed_at).length;
-  $("#count") && ($("#count").textContent = `${list.length} shown · ${active} in stock`);
+  $("#count") && ($("#count").textContent = `${list.length} shown · ${active} available`);
 }
 
 function emptyMessage() {
-  return !cars.length ? "Loading inventory…" : $("#showSold").checked
+  return !cars.length ? "Loading inventory…" : $("#stat").value === "sold"
     ? "No sold cars yet. Cars appear here once they drop off the dealer's inventory." : "No cars match these filters.";
 }
 
@@ -239,14 +260,15 @@ function renderGrid(list) {
       <div class="photo" style="background-image:url('${esc(c.photo)}')">
         <div class="badges">
           <span class="badge ${c.condition === "new" ? "new" : ""}">${esc(c.condition?.toUpperCase())}</span>
-          ${c.in_transit ? `<span class="badge">IN TRANSIT</span>` : ""}
-          ${c.removed_at ? `<span class="badge">SOLD / REMOVED</span>` : ""}
+          ${c.removed_at ? `<span class="badge">SOLD ${esc(dateFmt(c.removed_at).replace(/, \d{4}$/, "").toUpperCase())}</span>`
+            : isPending(c) ? `<span class="badge pending">SALE PENDING</span>`
+            : /transit|production/i.test(c.status || "") ? `<span class="badge">${esc(c.status.toUpperCase())}</span>` : ""}
           ${c.change ? `<span class="badge ${c.change < 0 ? "drop" : "rise"}">${c.change < 0 ? "▼" : "▲"} ${money(Math.abs(c.change))}</span>` : ""}
         </div>
       </div>
       <div class="body">
         <div class="name">${esc(c.name)}</div>
-        <div class="meta">${c.mileage ? c.mileage.toLocaleString("en-US") + " mi · " : ""}${esc(c.ext_color || "")} · Stock ${esc(c.stock)}</div>
+        <div class="meta">${c.mileage ? c.mileage.toLocaleString("en-US") + " mi · " : ""}${esc(c.ext_color || "")}${c.stock ? ` · Stock ${esc(c.stock)}` : ""}</div>
         <div class="meta">Listed ${dateFmt(c.listed)}</div>
         <div class="prices">
           <span class="price">${money(c.price)}</span>
@@ -261,7 +283,7 @@ function renderGrid(list) {
 
 // ---- Table view: one row per car. Clicking a header sorts by that column
 // (overriding the sort dropdown until the dropdown is changed again).
-const statusText = c => c.removed_at ? `Sold ${dateFmt(c.removed_at)}` : c.in_transit ? "In transit" : "In stock";
+const statusText = c => c.removed_at ? "Sold" : c.status || "In Stock";
 const histText = c => c.history.map(p => money(p.price)).join(" → ");
 const signed = n => n ? (n < 0 ? "−" : "+") + money(Math.abs(n)) : "";
 const COLUMNS = [
@@ -281,7 +303,10 @@ const COLUMNS = [
   { key: "lastChange", label: "Last change", val: c => c.lastChange, fmt: c => c.lastChange ? dateFmt(c.lastChange) : "" },
   { key: "listed", label: "Listed", val: c => c.listed, fmt: c => dateFmt(c.listed) },
   { key: "first_seen", label: "First tracked", val: c => c.first_seen, fmt: c => dateFmt(c.first_seen) },
-  { key: "status", label: "Status", val: c => (c.removed_at ? "2" : c.in_transit ? "1" : "0") + (c.removed_at || ""), fmt: statusText },
+  { key: "status", label: "Status", val: statusText },
+  { key: "pending_at", label: "Sale pending", val: c => c.pending_at, fmt: c => c.pending_at ? dateFmt(c.pending_at) : "" },
+  { key: "removed_at", label: "Sold", val: c => c.removed_at, fmt: c => c.removed_at ? dateFmt(c.removed_at) : "" },
+  { key: "daysOnLot", label: "Days on lot", num: true, val: c => c.daysOnLot },
   { key: "stock", label: "Stock #", val: c => c.stock },
   { key: "vin", label: "VIN", val: c => c.vin, cls: "vin" },
   { key: "history", label: "Price history", val: c => c.history.length, fmt: c => esc(histText(c)), cls: "hist" },
@@ -319,7 +344,8 @@ function downloadCSV() {
     ["Price", c => c.price], ["MSRP", c => c.msrp], ["First price", c => c.firstPrice],
     ["Change", c => c.change], ["Lowest seen", c => c.low], ["Price changes", c => c.history.length - 1],
     ["Listed", c => c.listed], ["First tracked", c => c.first_seen.slice(0, 10)],
-    ["Removed", c => c.removed_at ? c.removed_at.slice(0, 10) : ""], ["Status", statusText],
+    ["Status", statusText], ["Sale pending", c => c.pending_at ? c.pending_at.slice(0, 10) : ""],
+    ["Sold", c => c.removed_at ? c.removed_at.slice(0, 10) : ""], ["Days on lot", c => c.daysOnLot],
     ["Price history", c => c.history.map(p => `${p.at.slice(0, 10)} ${p.price ?? ""}`).join("; ")],
     ["URL", c => c.url],
   ];
@@ -343,15 +369,16 @@ function openCar(vin) {
   const spec = (k, v) => v ? `<div><span>${k}:</span> ${esc(v)}</div>` : "";
   $("#dlgBody").innerHTML = `
     <div class="row"><h2>${esc(c.name)}</h2><button onclick="dlg.close()">Close</button></div>
-    <div class="meta">VIN ${esc(c.vin)} · Stock ${esc(c.stock)} · <a href="${esc(c.url)}" target="_blank" rel="noopener">View on dealer site ↗</a></div>
-    <div class="prices"><span class="price">${money(c.price)}</span>
+    <div class="meta">VIN ${esc(c.vin)}${c.stock ? ` · Stock ${esc(c.stock)}` : ""} · <a href="${esc(c.url)}" target="_blank" rel="noopener">View on dealer site ↗</a></div>
+    <div class="prices">${c.removed_at ? `<span class="meta">Last asking price</span>` : ""}<span class="price">${money(c.price)}</span>
       ${c.msrp ? `<span class="meta">MSRP ${money(c.msrp)}</span>` : ""}</div>
     <div class="specs">
       ${spec("Condition", c.condition)}${spec("Listed", dateFmt(c.listed))}${spec("First tracked", dateFmt(c.first_seen))}
       ${spec("Mileage", c.mileage ? c.mileage.toLocaleString("en-US") + " mi" : "")}${spec("Exterior", c.ext_color)}
       ${spec("Interior", c.int_color)}${spec("Body", c.body)}${spec("Engine", c.engine)}${spec("Fuel", c.fuel)}
       ${spec("Transmission", c.transmission)}${spec("MPG", c.mpg_city ? `${c.mpg_city} city / ${c.mpg_hwy} hwy` : "")}
-      ${spec("Removed", c.removed_at ? dateFmt(c.removed_at) : "")}
+      ${spec("Status", statusText(c))}${spec("Sale pending since", c.pending_at ? dateFmt(c.pending_at) : "")}
+      ${spec("Sold (left inventory)", c.removed_at ? dateFmt(c.removed_at) : "")}${spec(c.removed_at ? "Days on lot" : "Days listed", String(c.daysOnLot))}
     </div>
     ${spark(c.history, "big", 700, 200, true) || `<p class="meta">No price changes recorded yet. A chart will appear once the price moves.</p>`}
     <table><thead><tr><th>Recorded</th><th>Price</th><th>MSRP</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table>`;
